@@ -48,10 +48,22 @@ func Dir() string {
 func configPath() string { return filepath.Join(Dir(), "config.json") }
 func tokenPath() string  { return filepath.Join(Dir(), "token.json") }
 
+// WriteConfig persists the app/tenant identity to the config file.
+func WriteConfig(cfg Config) error {
+	if err := os.MkdirAll(Dir(), 0o700); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath(), raw, 0o600)
+}
+
 func Load() (*Auth, error) {
 	raw, err := os.ReadFile(configPath())
 	if err != nil {
-		return nil, fmt.Errorf("no config at %s (run setup first): %w", configPath(), err)
+		return nil, fmt.Errorf("no config at %s (run `outlook-scan setup` first): %w", configPath(), err)
 	}
 	a := &Auth{}
 	if err := json.Unmarshal(raw, &a.cfg); err != nil {
@@ -74,8 +86,12 @@ func (a *Auth) HasSession() bool { return a.cache.RefreshToken != "" }
 // ExpiresAt returns the cached access token's expiry (zero if none).
 func (a *Auth) ExpiresAt() time.Time { return a.cache.ExpiresAt }
 
+func endpointFor(tenant, kind string) string {
+	return "https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0/" + kind
+}
+
 func (a *Auth) endpoint(kind string) string {
-	return "https://login.microsoftonline.com/" + a.cfg.TenantID + "/oauth2/v2.0/" + kind
+	return endpointFor(a.cfg.TenantID, kind)
 }
 
 // Token returns a valid access token, refreshing silently when needed.
@@ -99,12 +115,22 @@ func (a *Auth) Token() (string, error) {
 	return tok, nil
 }
 
-// Login runs the device-code flow, printing instructions to w.
-func (a *Auth) Login(w io.Writer) error {
-	form := url.Values{"client_id": {a.cfg.ClientID}, "scope": {scopes}}
-	resp, err := http.PostForm(a.endpoint("devicecode"), form)
+// TokenResult is the outcome of a device-code flow.
+type TokenResult struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	Scope        string `json:"scope"`
+	ExpiresIn    int    `json:"expires_in"`
+}
+
+// RunDeviceCode executes a device-code flow against the given tenant
+// ("organizations" or a tenant id) for an arbitrary public client and
+// scope string, printing sign-in instructions to w. Nothing is persisted.
+func RunDeviceCode(w io.Writer, tenant, clientID, scope string) (*TokenResult, error) {
+	form := url.Values{"client_id": {clientID}, "scope": {scope}}
+	resp, err := http.PostForm(endpointFor(tenant, "devicecode"), form)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	var dc struct {
@@ -117,10 +143,10 @@ func (a *Auth) Login(w io.Writer) error {
 		ErrorDesc       string `json:"error_description"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&dc); err != nil {
-		return err
+		return nil, err
 	}
 	if dc.Error != "" {
-		return fmt.Errorf("device code request: %s: %s", dc.Error, dc.ErrorDesc)
+		return nil, fmt.Errorf("device code request: %s: %s", dc.Error, dc.ErrorDesc)
 	}
 	fmt.Fprintf(w, "To sign in, open %s and enter code: %s\n", dc.VerificationURI, dc.UserCode)
 	fmt.Fprintf(w, "(code valid for %d minutes; waiting for sign-in...)\n", dc.ExpiresIn/60)
@@ -128,19 +154,30 @@ func (a *Auth) Login(w io.Writer) error {
 	interval := time.Duration(max(dc.Interval, 5)) * time.Second
 	deadline := time.Now().Add(time.Duration(dc.ExpiresIn) * time.Second)
 	form = url.Values{
-		"client_id":   {a.cfg.ClientID},
+		"client_id":   {clientID},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 		"device_code": {dc.DeviceCode},
 	}
 	for time.Now().Before(deadline) {
 		time.Sleep(interval)
-		_, err := a.tokenRequest(form)
-		if err == nil {
-			fmt.Fprintf(w, "Signed in. Tokens cached at %s\n", tokenPath())
-			return nil
+		resp, err := http.PostForm(endpointFor(tenant, "token"), form)
+		if err != nil {
+			return nil, err
 		}
-		var oe *oauthError
-		if errors.As(err, &oe) {
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			tok := &TokenResult{}
+			if err := json.Unmarshal(body, tok); err != nil {
+				return nil, err
+			}
+			return tok, nil
+		}
+		oe := &oauthError{}
+		if json.Unmarshal(body, oe) == nil && oe.Code != "" {
 			switch oe.Code {
 			case "authorization_pending":
 				continue
@@ -148,10 +185,28 @@ func (a *Auth) Login(w io.Writer) error {
 				interval += 5 * time.Second
 				continue
 			}
+			return nil, oe
 		}
+		return nil, fmt.Errorf("token endpoint: HTTP %d", resp.StatusCode)
+	}
+	return nil, errors.New("device code expired before sign-in completed")
+}
+
+// Login runs the device-code flow for the configured app and caches the
+// resulting tokens.
+func (a *Auth) Login(w io.Writer) error {
+	tok, err := RunDeviceCode(w, a.cfg.TenantID, a.cfg.ClientID, scopes)
+	if err != nil {
 		return err
 	}
-	return errors.New("device code expired before sign-in completed")
+	a.cache.AccessToken = tok.AccessToken
+	a.cache.RefreshToken = tok.RefreshToken
+	a.cache.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+	if err := a.save(); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "Signed in. Tokens cached at %s\n", tokenPath())
+	return nil
 }
 
 type oauthError struct {

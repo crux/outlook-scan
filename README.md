@@ -12,7 +12,8 @@ what to extract and keep.
 ## Commands
 
 ```
-outlook-scan login                            one-time device-code sign-in (tokens cached, ~90-day sessions)
+outlook-scan setup                            one-time setup: create the Entra app and sign in
+outlook-scan login                            device-code sign-in (tokens cached, ~90-day sessions)
 outlook-scan status                           config, session, signed-in account
 outlook-scan folders                          folder list with item/unread counts
 outlook-scan list [--folder NAME] [--unread] [--since 7d] [--max N]
@@ -28,38 +29,42 @@ All read commands accept `--json`. Folder names may be display names
 
 ## Setup
 
-1. **App registration** (one-time, in your Entra ID tenant — the tool
-   needs its own OAuth client identity). In the [Entra admin
-   center](https://entra.microsoft.com) → *App registrations* → *New
-   registration*:
-   - Name e.g. `outlook-scan`; single tenant; no redirect URI needed.
-   - *Authentication* → enable **Allow public client flows** (this
-     enables the device-code login). No client secret — a CLI can't
-     keep one, and the client id is not confidential.
-   - *API permissions* → *Microsoft Graph* → *Delegated* → add
-     `Mail.Read` (`User.Read` and `offline_access` are granted at
-     sign-in automatically).
+```
+go install github.com/crux/outlook-scan/cmd/outlook-scan@latest
+outlook-scan setup
+```
 
-   You (or each user) consent at first login. If your tenant has user
-   consent disabled, an admin must approve the `Mail.Read` grant once —
-   it is read-only and limited to the signing user's own mailbox.
+`setup` explains what it will do, asks once, and handles the rest: one
+browser sign-in, a read-only app registration named `outlook-scan` in
+your Microsoft 365 tenant, sign-in to it. The temporary setup
+permissions it borrows are removed again automatically; the only things
+that persist are the app registration, `~/.outlook-scan/config.json`,
+and your mail session (`~/.outlook-scan/token.json`, 0600, readable
+mail only). `outlook-scan setup --help` shows the knobs.
 
-2. **Config**: write `~/.outlook-scan/config.json` with the ids shown
-   on the registration's overview page:
+### Manual registration (locked-down tenants, or by preference)
 
-   ```json
-   {"client_id": "<application (client) id>", "tenant_id": "<directory (tenant) id>"}
-   ```
+If `setup` hits a consent wall — or you'd rather click yourself — in
+the [Entra admin center](https://entra.microsoft.com) → *App
+registrations* → *New registration*:
 
-3. **Install** (Go 1.22+):
+- Name e.g. `outlook-scan`; single tenant; no redirect URI needed.
+- *Authentication* → enable **Allow public client flows** (this
+  enables the device-code login). No client secret — a CLI can't
+  keep one, and the client id is not confidential.
+- *API permissions* → *Microsoft Graph* → *Delegated* → add
+  `Mail.Read` (`User.Read` and `offline_access` are granted at
+  sign-in automatically).
 
-   ```
-   go install github.com/crux/outlook-scan/cmd/outlook-scan@latest
-   ```
+You (or each user) consent at first login. If your tenant has user
+consent disabled, an admin must approve the `Mail.Read` grant once —
+it is read-only and limited to the signing user's own mailbox.
 
-4. **Sign in**: `outlook-scan login` — open the printed URL, enter the
-   code, approve. Tokens live in `~/.outlook-scan/token.json` (0600);
-   access is limited to reading the signed-in user's own mail.
+Then hand the two ids from the registration's overview page to the CLI:
+
+```
+outlook-scan setup --client-id <application id> --tenant-id <directory id>
+```
 
 ## Claude Code integration
 

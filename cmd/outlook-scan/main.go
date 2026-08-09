@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crux/outlook-scan/internal/bootstrap"
 	"github.com/crux/outlook-scan/internal/graph"
 	"github.com/crux/outlook-scan/internal/msauth"
 	"github.com/crux/outlook-scan/internal/render"
@@ -21,6 +22,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: outlook-scan <command> [flags] [args]
 
 commands:
+  setup                       one-time setup: create the Entra app and sign in
   login                       sign in via device code (one-time; tokens cached)
   status                      show config, session, and signed-in user
   folders                     list mail folders with item counts
@@ -45,9 +47,10 @@ func main() {
 		os.Exit(2)
 	}
 	cmds := map[string]func([]string) error{
-		"login":   func([]string) error { return cmdLogin() },
-		"status":  func([]string) error { return cmdStatus() },
-		"folders": func([]string) error { return cmdFolders() },
+		"setup":       cmdSetup,
+		"login":       func([]string) error { return cmdLogin() },
+		"status":      func([]string) error { return cmdStatus() },
+		"folders":     func([]string) error { return cmdFolders() },
 		"list":        cmdList,
 		"search":      cmdSearch,
 		"get":         cmdGet,
@@ -71,6 +74,63 @@ func client() (*graph.Client, error) {
 		return nil, err
 	}
 	return graph.New(auth), nil
+}
+
+func cmdSetup(args []string) error {
+	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	yes := fs.Bool("yes", false, "skip the confirmation prompt")
+	name := fs.String("name", "outlook-scan", "app registration display name")
+	viaClient := fs.String("via-client", "", "alternative bootstrap public client id")
+	keep := fs.Bool("keep-bootstrap-consent", false, "do not remove the setup permissions afterwards")
+	clientID := fs.String("client-id", "", "manual mode: client id of a portal-created app registration")
+	tenantID := fs.String("tenant-id", "", "manual mode: directory (tenant) id")
+	fs.Parse(args)
+
+	// Manual mode: portal registration done by hand, just write config + login.
+	if *clientID != "" || *tenantID != "" {
+		if *clientID == "" || *tenantID == "" {
+			return fmt.Errorf("manual mode needs both --client-id and --tenant-id")
+		}
+		if err := msauth.WriteConfig(msauth.Config{ClientID: *clientID, TenantID: *tenantID}); err != nil {
+			return err
+		}
+		fmt.Println("Config written.")
+		return cmdLogin()
+	}
+
+	// Already configured: report and change nothing.
+	if auth, err := msauth.Load(); err == nil {
+		cfg := auth.Config()
+		fmt.Printf("Already set up (tenant %s, app %s).\n", cfg.TenantID, cfg.ClientID)
+		if auth.HasSession() {
+			fmt.Println("A session exists — you're good. See `outlook-scan status`.")
+		} else {
+			fmt.Println("No session yet — run `outlook-scan login`.")
+		}
+		fmt.Println("To redo setup, delete ~/.outlook-scan/config.json first.")
+		return nil
+	}
+
+	fmt.Println("outlook-scan setup will:")
+	fmt.Println("  1. Ask you to sign in once in the browser (device code).")
+	fmt.Printf("  2. Create a read-only app registration %q in your Microsoft 365 tenant.\n", *name)
+	fmt.Println("  3. Sign you in to it. Mail access is read-only, your own mailbox only.")
+	fmt.Println("(Prefer doing this by hand? See the manual registration section in the README.)")
+	if !*yes {
+		fmt.Print("Proceed? [Y/n] ")
+		var answer string
+		fmt.Scanln(&answer)
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer != "" && answer != "y" && answer != "yes" {
+			fmt.Println("Aborted — nothing was changed.")
+			return nil
+		}
+	}
+	return bootstrap.Run(os.Stdout, bootstrap.Options{
+		Name:        *name,
+		ViaClient:   *viaClient,
+		KeepConsent: *keep,
+	})
 }
 
 func cmdLogin() error {
