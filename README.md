@@ -1,9 +1,12 @@
 # outlook-scan
 
-On-demand, read-only access to a Microsoft 365 mailbox from the command
-line, designed for consumption by LLM coding assistants (stdout-first,
-markdown output). Backed by the Microsoft Graph API — the Outlook client
-does not need to be installed or running.
+Let Claude Code (or any LLM CLI assistant) read your Outlook / Microsoft
+365 inbox: on-demand, read-only mailbox access from the command line —
+say "check my inbox", "find the mails about X", "pull up that thread".
+Stdout-first markdown, backed by the Microsoft Graph API; the Outlook
+client does not need to be installed or running, and no IT tickets or
+admin approval are required in most tenants (`outlook-scan setup`
+registers its own least-privilege app).
 
 Deliberately **not** a sync/archive tool: nothing is stored locally
 unless explicitly requested with `--save`. The consuming session decides
