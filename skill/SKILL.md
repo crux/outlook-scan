@@ -60,6 +60,15 @@ All read commands accept `--json` for structured output.
   previous list/search.
 - "Save that mail + attachments" → `get --save DIR --attachments "ID"`.
 
+## S/MIME mail
+
+Opaque-signed mail is unwrapped automatically in get/thread/attachments
+- body and real attachments appear normally, tagged "(unwrapped from
+opaque S/MIME signature - not verified)". Relay that unverified caveat
+when the mail's authenticity matters. Encrypted mail shows "🔒 encrypted
+(S/MIME)" - its content is NOT readable via the API; tell the user to
+open it in Outlook instead.
+
 ## Troubleshooting
 
 - Error `no session — run outlook-scan login` (or refresh failure):

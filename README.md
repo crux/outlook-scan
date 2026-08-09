@@ -86,7 +86,12 @@ any session.
 
 ## Design notes
 
-- Pure Go stdlib; no external dependencies.
+- Pure Go; the single external dependency is `smallstep/pkcs7`, used to
+  unwrap opaque S/MIME mail.
+- Opaque S/MIME signed messages (empty body + `smime.p7m`) are unwrapped
+  automatically: body and real attachments are extracted client-side and
+  tagged as unverified. Encrypted (enveloped) mail is marked with a 🔒 -
+  its content is not readable via the API by design.
 - Bodies are requested as plain text (`Prefer:
   outlook.body-content-type="text"`).
 - Threads are assembled server-side via `conversationId` across all

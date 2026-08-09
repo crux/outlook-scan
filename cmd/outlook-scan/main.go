@@ -16,7 +16,55 @@ import (
 	"github.com/crux/outlook-scan/internal/graph"
 	"github.com/crux/outlook-scan/internal/msauth"
 	"github.com/crux/outlook-scan/internal/render"
+	"github.com/crux/outlook-scan/internal/smime"
 )
+
+const smimeUnwrapNote = "(unwrapped from opaque S/MIME signature - not verified)"
+const smimeEncryptedNote = "🔒 encrypted (S/MIME) - content not readable via the API"
+
+// maybeUnwrapSMIME detects an opaque S/MIME message (empty body + pkcs7
+// container attachment), downloads and unwraps it. Returns nil when the
+// message is not S/MIME or unwrapping failed (warned on stderr).
+func maybeUnwrapSMIME(c *graph.Client, m *graph.Message, atts []graph.Attachment) *smime.Result {
+	if m.Body != nil && strings.TrimSpace(m.Body.Content) != "" {
+		return nil
+	}
+	for _, a := range atts {
+		if !smime.IsPKCS7Attachment(a.Name, a.ContentType) {
+			continue
+		}
+		blob, err := c.AttachmentContent(m.ID, a.ID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "warning: S/MIME container download failed:", err)
+			return nil
+		}
+		res, err := smime.Unwrap(blob)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "warning: S/MIME unwrap failed:", err)
+			return nil
+		}
+		return res
+	}
+	return nil
+}
+
+// applySMIME rewrites message body and display attachments from an unwrap
+// result.
+func applySMIME(m *graph.Message, res *smime.Result) []graph.Attachment {
+	if res.Encrypted {
+		m.Body = &graph.ItemBody{ContentType: "text", Content: smimeEncryptedNote}
+		return nil
+	}
+	m.Body = &graph.ItemBody{ContentType: "text", Content: smimeUnwrapNote + "\n\n" + res.Body}
+	var atts []graph.Attachment
+	for _, p := range res.Parts {
+		atts = append(atts, graph.Attachment{
+			Type: "#microsoft.graph.fileAttachment",
+			Name: p.Name, Size: len(p.Data), ContentType: p.ContentType,
+		})
+	}
+	return atts
+}
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: outlook-scan <command> [flags] [args]
@@ -293,6 +341,10 @@ func cmdGet(args []string) error {
 			fmt.Fprintln(os.Stderr, "warning: attachment listing failed:", err)
 		}
 	}
+	sv := maybeUnwrapSMIME(c, m, atts)
+	if sv != nil {
+		atts = applySMIME(m, sv)
+	}
 	md := render.Message(m, atts)
 	if *save != "" {
 		path, err := render.Save(*save, m.Received.Local().Format("2006-01-02"), m.Subject, md)
@@ -301,11 +353,30 @@ func cmdGet(args []string) error {
 		}
 		fmt.Println("saved:", path)
 		if *withAtts {
+			if sv != nil && !sv.Encrypted {
+				return saveInnerParts(sv.Parts, *save)
+			}
 			return downloadAttachments(c, m.ID, atts, *save)
 		}
 		return nil
 	}
 	fmt.Print(md)
+	return nil
+}
+
+// saveInnerParts writes attachments extracted from an S/MIME container.
+func saveInnerParts(parts []smime.Part, dir string) error {
+	if len(parts) == 0 {
+		fmt.Println("no attachments inside the S/MIME container")
+		return nil
+	}
+	for _, p := range parts {
+		path, err := render.SaveRaw(dir, p.Name, p.Data)
+		if err != nil {
+			return err
+		}
+		fmt.Println("saved:", path)
+	}
 	return nil
 }
 
@@ -352,6 +423,35 @@ func cmdAttachments(args []string) error {
 	if *asJSON {
 		return printJSON(atts)
 	}
+
+	// Opaque S/MIME (classic shape: the container is the only attachment):
+	// operate on the inner attachments, not the container.
+	var sv *smime.Result
+	if len(atts) == 1 && smime.IsPKCS7Attachment(atts[0].Name, atts[0].ContentType) {
+		if m, err := c.GetMeta(fs.Arg(0)); err == nil {
+			m.Body = nil // metadata fetch has no body; force the empty-body check
+			sv = maybeUnwrapSMIME(c, m, atts)
+		}
+	}
+	if sv != nil && !sv.Encrypted {
+		if *save != "" {
+			return saveInnerParts(sv.Parts, *save)
+		}
+		if len(sv.Parts) == 0 {
+			fmt.Println("no attachments inside the S/MIME container")
+			return nil
+		}
+		for i, p := range sv.Parts {
+			fmt.Printf("%2d. %s (%s, file, unwrapped from S/MIME)\n",
+				i+1, p.Name, render.SizeStr(len(p.Data)))
+		}
+		return nil
+	}
+	if sv != nil && sv.Encrypted {
+		fmt.Println(smimeEncryptedNote)
+		return nil
+	}
+
 	if *save != "" {
 		return downloadAttachments(c, fs.Arg(0), atts, *save)
 	}
@@ -400,6 +500,20 @@ func cmdThread(args []string) error {
 	}
 	if *asJSON {
 		return printJSON(msgs)
+	}
+	// Unwrap opaque S/MIME members of the thread so they render with content.
+	for i := range msgs {
+		m := &msgs[i]
+		if !m.HasAttachments || (m.Body != nil && strings.TrimSpace(m.Body.Content) != "") {
+			continue
+		}
+		atts, err := c.Attachments(m.ID)
+		if err != nil {
+			continue
+		}
+		if sv := maybeUnwrapSMIME(c, m, atts); sv != nil {
+			applySMIME(m, sv)
+		}
 	}
 	md := render.Thread(msgs)
 	if *save != "" {
