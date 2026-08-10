@@ -1,7 +1,7 @@
 # outlook-scan
 
 Let Claude Code (or any LLM CLI assistant) read your Outlook / Microsoft
-365 inbox: on-demand, read-only mailbox access from the command line —
+365 inbox: on-demand, read-only mailbox access from the command line -
 say "check my inbox", "find the mails about X", "pull up that thread".
 Stdout-first markdown, backed by the Microsoft Graph API; the Outlook
 client does not need to be installed or running, and no IT tickets or
@@ -50,20 +50,20 @@ mail only). `outlook-scan setup --help` shows the knobs.
 
 ### Manual registration (locked-down tenants, or by preference)
 
-If `setup` hits a consent wall — or you'd rather click yourself — in
+If `setup` hits a consent wall - or you'd rather click yourself - in
 the [Entra admin center](https://entra.microsoft.com) → *App
 registrations* → *New registration*:
 
 - Name e.g. `outlook-scan`; single tenant; no redirect URI needed.
 - *Authentication* → enable **Allow public client flows** (this
-  enables the device-code login). No client secret — a CLI can't
+  enables the device-code login). No client secret - a CLI can't
   keep one, and the client id is not confidential.
 - *API permissions* → *Microsoft Graph* → *Delegated* → add
   `Mail.Read` (`User.Read` and `offline_access` are granted at
   sign-in automatically).
 
 You (or each user) consent at first login. If your tenant has user
-consent disabled, an admin must approve the `Mail.Read` grant once —
+consent disabled, an admin must approve the `Mail.Read` grant once -
 it is read-only and limited to the signing user's own mailbox.
 
 Then hand the two ids from the registration's overview page to the CLI:
