@@ -12,6 +12,9 @@ Deliberately **not** a sync/archive tool: nothing is stored locally
 unless explicitly requested with `--save`. The consuming session decides
 what to extract and keep.
 
+Sibling tool: [teams-scan](https://github.com/crux/teams-scan) - same
+design and auth model, for Microsoft Teams chats instead of mail.
+
 ## Commands
 
 ```
