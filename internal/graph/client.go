@@ -3,6 +3,7 @@
 package graph
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,6 +84,56 @@ func (c *Client) GetJSON(path string, v any) error {
 		return err
 	}
 	return json.Unmarshal(body, v)
+}
+
+// Post sends a JSON body to base+path and decodes any JSON response into out
+// (out may be nil). Same auth/retry behavior as GetRaw.
+func (c *Client) Post(path string, in, out any) error {
+	raw, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	for attempt := 0; ; attempt++ {
+		tok, err := c.Auth.Token()
+		if err != nil {
+			return err
+		}
+		req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(raw))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		switch {
+		case resp.StatusCode >= 200 && resp.StatusCode < 300:
+			if out != nil && len(body) > 0 {
+				return json.Unmarshal(body, out)
+			}
+			return nil
+		case (resp.StatusCode == http.StatusTooManyRequests ||
+			resp.StatusCode == http.StatusServiceUnavailable) && attempt < 5:
+			wait := 5 * time.Second
+			if s := resp.Header.Get("Retry-After"); s != "" {
+				if n, err := strconv.Atoi(s); err == nil {
+					wait = time.Duration(n) * time.Second
+				}
+			}
+			time.Sleep(wait)
+		case resp.StatusCode == http.StatusUnauthorized && attempt == 0:
+			continue
+		default:
+			return fmt.Errorf("POST %s: HTTP %d: %s", path, resp.StatusCode, truncate(body, 300))
+		}
+	}
 }
 
 func truncate(b []byte, n int) string {

@@ -202,6 +202,26 @@ func (c *Client) Thread(conversationID string) ([]Message, error) {
 	return msgs, nil
 }
 
+// DraftRef points at a created draft message.
+type DraftRef struct {
+	ID      string `json:"id"`
+	WebLink string `json:"webLink"`
+}
+
+// CreateReplyDraft creates an in-thread reply draft (createReply or
+// createReplyAll) with comment as the reply text placed above the quoted
+// original. The draft lands in Drafts and is never sent. Needs Mail.ReadWrite.
+func (c *Client) CreateReplyDraft(messageID string, all bool, comment string) (*DraftRef, error) {
+	action := "createReply"
+	if all {
+		action = "createReplyAll"
+	}
+	d := &DraftRef{}
+	err := c.Post("/me/messages/"+url.PathEscape(messageID)+"/"+action,
+		map[string]string{"comment": comment}, d)
+	return d, err
+}
+
 func (c *Client) pageMessages(path string, maxN int) ([]Message, error) {
 	var out []Message
 	for path != "" && len(out) < maxN {

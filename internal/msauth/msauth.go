@@ -15,8 +15,18 @@ import (
 	"time"
 )
 
-const scopes = "openid profile offline_access " +
-	"https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read"
+const baseScopes = "openid profile offline_access https://graph.microsoft.com/User.Read "
+const readScope = "https://graph.microsoft.com/Mail.Read"
+const writeScope = "https://graph.microsoft.com/Mail.ReadWrite"
+
+// scopeString returns the space-separated scope set for the given posture.
+// Mail.ReadWrite supersets Mail.Read, so write mode keeps all read access.
+func scopeString(write bool) string {
+	if write {
+		return baseScopes + writeScope
+	}
+	return baseScopes + readScope
+}
 
 // Config identifies the app registration and tenant. Written by setup,
 // read from ~/.outlook-scan/config.json.
@@ -24,6 +34,9 @@ type Config struct {
 	ClientID   string `json:"client_id"`
 	TenantID   string `json:"tenant_id"`
 	TenantName string `json:"tenant_name,omitempty"`
+	// Write, when true, makes this install request Mail.ReadWrite (drafts)
+	// instead of read-only Mail.Read. Opt-in per install.
+	Write bool `json:"write,omitempty"`
 }
 
 type tokenCache struct {
@@ -80,6 +93,12 @@ func Load() (*Auth, error) {
 
 func (a *Auth) Config() Config { return a.cfg }
 
+// scopes returns the scope set for this install's read/write posture.
+func (a *Auth) scopes() string { return scopeString(a.cfg.Write) }
+
+// WriteMode reports whether this install is configured for draft writing.
+func (a *Auth) WriteMode() bool { return a.cfg.Write }
+
 // HasSession reports whether a refresh token is cached.
 func (a *Auth) HasSession() bool { return a.cache.RefreshToken != "" }
 
@@ -106,7 +125,7 @@ func (a *Auth) Token() (string, error) {
 		"client_id":     {a.cfg.ClientID},
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {a.cache.RefreshToken},
-		"scope":         {scopes},
+		"scope":         {a.scopes()},
 	}
 	tok, err := a.tokenRequest(form)
 	if err != nil {
@@ -192,12 +211,22 @@ func RunDeviceCode(w io.Writer, tenant, clientID, scope string) (*TokenResult, e
 	return nil, errors.New("device code expired before sign-in completed")
 }
 
-// Login runs the device-code flow for the configured app and caches the
-// resulting tokens.
-func (a *Auth) Login(w io.Writer) error {
-	tok, err := RunDeviceCode(w, a.cfg.TenantID, a.cfg.ClientID, scopes)
+// Login runs the device-code flow using the current read/write posture.
+func (a *Auth) Login(w io.Writer) error { return a.LoginWith(w, a.cfg.Write) }
+
+// LoginWith runs the device-code flow requesting the read or write scope set
+// and, only on success, persists that posture and caches the tokens. A failed
+// or walled sign-in leaves the previous posture and session untouched.
+func (a *Auth) LoginWith(w io.Writer, write bool) error {
+	tok, err := RunDeviceCode(w, a.cfg.TenantID, a.cfg.ClientID, scopeString(write))
 	if err != nil {
 		return err
+	}
+	if write != a.cfg.Write {
+		a.cfg.Write = write
+		if err := WriteConfig(a.cfg); err != nil {
+			return err
+		}
 	}
 	a.cache.AccessToken = tok.AccessToken
 	a.cache.RefreshToken = tok.RefreshToken

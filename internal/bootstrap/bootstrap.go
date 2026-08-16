@@ -29,6 +29,7 @@ const graphAppID = "00000003-0000-0000-c000-000000000000" // Microsoft Graph
 // Delegated permission ids on the Graph resource (well-known GUIDs).
 var scopeIDs = map[string]string{
 	"Mail.Read":      "570282fd-fa5c-430d-a7fd-fc8dc98a9dca",
+	"Mail.ReadWrite": "024d486e-b451-40bb-833d-3e66d98c5c73",
 	"User.Read":      "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
 	"offline_access": "7427e0e9-2fba-42fe-b0c0-848c9e6a8182",
 }
@@ -134,6 +135,7 @@ func findOrCreateApp(g *client, name string) (string, error) {
 			"resourceAppId": graphAppID,
 			"resourceAccess": []map[string]string{
 				{"id": scopeIDs["Mail.Read"], "type": "Scope"},
+				{"id": scopeIDs["Mail.ReadWrite"], "type": "Scope"},
 				{"id": scopeIDs["User.Read"], "type": "Scope"},
 				{"id": scopeIDs["offline_access"], "type": "Scope"},
 			},

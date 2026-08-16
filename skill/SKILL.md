@@ -60,6 +60,24 @@ All read commands accept `--json` for structured output.
   previous list/search.
 - "Save that mail + attachments" → `get --save DIR --attachments "ID"`.
 
+## Writing reply drafts (opt-in, only if write mode is on)
+
+If this install has write mode enabled (`outlook-scan login --write`), you
+can create in-thread reply DRAFTS. They are saved to Drafts and NEVER sent
+- the user reviews and sends from Outlook.
+
+```bash
+outlook-scan reply [--all] --body "text"            "MESSAGE-ID"
+echo "longer reply text" | outlook-scan reply       "MESSAGE-ID"
+outlook-scan reply --all --body-file /path/reply.txt "MESSAGE-ID"
+```
+
+Typical flow: user says "draft a reply to X saying Y" → read the mail with
+`get`/`thread` for context, compose the reply text, then `reply` with it.
+Tell the user the draft is in Drafts for review - never imply it was sent.
+If it errors "write mode is off", tell them to run `outlook-scan login
+--write` once. Read-only installs simply don't have this ability.
+
 ## S/MIME mail
 
 Opaque-signed mail is unwrapped automatically in get/thread/attachments

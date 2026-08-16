@@ -1,7 +1,7 @@
 # outlook-scan
 
 Let Claude Code (or any LLM CLI assistant) read your Outlook / Microsoft
-365 inbox: on-demand, read-only mailbox access from the command line -
+365 inbox: on-demand, read-only mailbox access from the command line —
 say "check my inbox", "find the mails about X", "pull up that thread".
 Stdout-first markdown, backed by the Microsoft Graph API; the Outlook
 client does not need to be installed or running, and no IT tickets or
@@ -11,9 +11,6 @@ registers its own least-privilege app).
 Deliberately **not** a sync/archive tool: nothing is stored locally
 unless explicitly requested with `--save`. The consuming session decides
 what to extract and keep.
-
-Sibling tool: [teams-scan](https://github.com/crux/teams-scan) - same
-design and auth model, for Microsoft Teams chats instead of mail.
 
 ## Commands
 
@@ -27,7 +24,23 @@ outlook-scan search [--max N] "query"         server-side full-text search, all 
 outlook-scan get [--save DIR [--attachments]] MESSAGE-ID
 outlook-scan attachments [--save DIR] MESSAGE-ID
 outlook-scan thread [--save DIR] MESSAGE-ID|CONVERSATION-ID
+outlook-scan reply [--all] [--body TEXT|--body-file FILE] MESSAGE-ID   (write mode only; see below)
 ```
+
+### Read-only by default; opt-in draft writing
+
+The tool is read-only out of the box. To let it create **reply drafts**
+(in-thread, saved to Drafts, **never sent** - you review and send from
+Outlook), enable write mode once:
+
+```
+outlook-scan login --write      # requests Mail.ReadWrite; --read-only reverts
+```
+
+Trade-off: Microsoft has no drafts-only scope, so write mode grants
+`Mail.ReadWrite` (full mailbox read/write). It is opt-in per install;
+read-only installs keep `Mail.Read` and cannot write. Prefer per-user
+consent for write, keeping any org-wide admin consent at `Mail.Read`.
 
 All read commands accept `--json`. Folder names may be display names
 (any language) or common aliases (`inbox`, `archive`/`archiv`, `sent`,
@@ -50,20 +63,20 @@ mail only). `outlook-scan setup --help` shows the knobs.
 
 ### Manual registration (locked-down tenants, or by preference)
 
-If `setup` hits a consent wall - or you'd rather click yourself - in
+If `setup` hits a consent wall — or you'd rather click yourself — in
 the [Entra admin center](https://entra.microsoft.com) → *App
 registrations* → *New registration*:
 
 - Name e.g. `outlook-scan`; single tenant; no redirect URI needed.
 - *Authentication* → enable **Allow public client flows** (this
-  enables the device-code login). No client secret - a CLI can't
+  enables the device-code login). No client secret — a CLI can't
   keep one, and the client id is not confidential.
 - *API permissions* → *Microsoft Graph* → *Delegated* → add
   `Mail.Read` (`User.Read` and `offline_access` are granted at
   sign-in automatically).
 
 You (or each user) consent at first login. If your tenant has user
-consent disabled, an admin must approve the `Mail.Read` grant once -
+consent disabled, an admin must approve the `Mail.Read` grant once —
 it is read-only and limited to the signing user's own mailbox.
 
 Then hand the two ids from the registration's overview page to the CLI:

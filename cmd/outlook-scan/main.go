@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -71,7 +72,7 @@ func usage() {
 
 commands:
   setup                       one-time setup: create the Entra app and sign in
-  login                       sign in via device code (one-time; tokens cached)
+  login       [flags]         sign in via device code (one-time; tokens cached)
   status                      show config, session, and signed-in user
   folders                     list mail folders with item counts
   list        [flags]         recent messages (metadata) from a folder
@@ -79,12 +80,15 @@ commands:
   get         [flags] <id>    one full message as markdown
   thread      [flags] <id>    whole conversation (by message or conversation id)
   attachments [flags] <id>    list a message's attachments; --save downloads them
+  reply       [flags] <id>    create an in-thread reply DRAFT (never sends; needs write mode)
 
+flags (login):       --write (enable draft writing, Mail.ReadWrite)  --read-only (revert)
 flags (list):        --folder NAME  --unread  --since 7d|2w|2026-01-15  --max N  --json
 flags (search):      --max N  --json
 flags (get):         --save DIR  --attachments (with --save: download files too)  --json
 flags (thread):      --save DIR  --json
 flags (attachments): --save DIR  --json
+flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)
 
 Flags come before positional arguments.`)
 }
@@ -96,7 +100,7 @@ func main() {
 	}
 	cmds := map[string]func([]string) error{
 		"setup":       cmdSetup,
-		"login":       func([]string) error { return cmdLogin() },
+		"login":       cmdLogin,
 		"status":      func([]string) error { return cmdStatus() },
 		"folders":     func([]string) error { return cmdFolders() },
 		"list":        cmdList,
@@ -104,6 +108,7 @@ func main() {
 		"get":         cmdGet,
 		"thread":      cmdThread,
 		"attachments": cmdAttachments,
+		"reply":       cmdReply,
 	}
 	cmd, ok := cmds[os.Args[1]]
 	if !ok {
@@ -143,7 +148,7 @@ func cmdSetup(args []string) error {
 			return err
 		}
 		fmt.Println("Config written.")
-		return cmdLogin()
+		return cmdLogin(nil)
 	}
 
 	// Already configured: report and change nothing.
@@ -181,12 +186,85 @@ func cmdSetup(args []string) error {
 	})
 }
 
-func cmdLogin() error {
+func cmdLogin(args []string) error {
+	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	write := fs.Bool("write", false, "enable draft writing for this install (requests Mail.ReadWrite)")
+	readOnly := fs.Bool("read-only", false, "revert this install to read-only (Mail.Read)")
+	fs.Parse(args)
+	if *write && *readOnly {
+		return fmt.Errorf("--write and --read-only are mutually exclusive")
+	}
 	auth, err := msauth.Load()
 	if err != nil {
 		return err
 	}
-	return auth.Login(os.Stdout)
+	desiredWrite := auth.WriteMode()
+	switch {
+	case *write:
+		desiredWrite = true
+		fmt.Println("The sign-in below asks you to consent to Mail.ReadWrite (draft writing).")
+	case *readOnly:
+		desiredWrite = false
+	}
+	return auth.LoginWith(os.Stdout, desiredWrite)
+}
+
+func cmdReply(args []string) error {
+	fs := flag.NewFlagSet("reply", flag.ExitOnError)
+	all := fs.Bool("all", false, "reply to all recipients")
+	body := fs.String("body", "", "reply text (inline)")
+	bodyFile := fs.String("body-file", "", "read reply text from a file")
+	fs.Parse(args)
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: outlook-scan reply [--all] [--body TEXT|--body-file FILE] <message-id>")
+	}
+	auth, err := msauth.Load()
+	if err != nil {
+		return err
+	}
+	if !auth.WriteMode() {
+		return fmt.Errorf("write mode is off - enable it once with: outlook-scan login --write")
+	}
+	text, err := readBodyInput(*body, *bodyFile)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("empty reply body - provide --body, --body-file, or pipe text via stdin")
+	}
+	d, err := graph.New(auth).CreateReplyDraft(fs.Arg(0), *all, text)
+	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 403") {
+			return fmt.Errorf("permission denied - re-run `outlook-scan login --write` to consent to Mail.ReadWrite: %w", err)
+		}
+		return err
+	}
+	kind := "reply"
+	if *all {
+		kind = "reply-all"
+	}
+	fmt.Printf("Draft %s created in your Drafts folder - review and send from Outlook.\n", kind)
+	if d.WebLink != "" {
+		fmt.Println("open:", d.WebLink)
+	}
+	return nil
+}
+
+// readBodyInput resolves the reply text from --body, --body-file, or piped
+// stdin (in that order).
+func readBodyInput(body, bodyFile string) (string, error) {
+	if body != "" {
+		return body, nil
+	}
+	if bodyFile != "" {
+		b, err := os.ReadFile(bodyFile)
+		return string(b), err
+	}
+	if stat, _ := os.Stdin.Stat(); stat != nil && stat.Mode()&os.ModeCharDevice == 0 {
+		b, err := io.ReadAll(os.Stdin)
+		return string(b), err
+	}
+	return "", nil
 }
 
 func cmdStatus() error {
