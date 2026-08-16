@@ -1,7 +1,7 @@
 # outlook-scan
 
 Let Claude Code (or any LLM CLI assistant) read your Outlook / Microsoft
-365 inbox: on-demand, read-only mailbox access from the command line —
+365 inbox: on-demand, read-only mailbox access from the command line -
 say "check my inbox", "find the mails about X", "pull up that thread".
 Stdout-first markdown, backed by the Microsoft Graph API; the Outlook
 client does not need to be installed or running, and no IT tickets or
@@ -63,20 +63,20 @@ mail only). `outlook-scan setup --help` shows the knobs.
 
 ### Manual registration (locked-down tenants, or by preference)
 
-If `setup` hits a consent wall — or you'd rather click yourself — in
+If `setup` hits a consent wall - or you'd rather click yourself - in
 the [Entra admin center](https://entra.microsoft.com) → *App
 registrations* → *New registration*:
 
 - Name e.g. `outlook-scan`; single tenant; no redirect URI needed.
 - *Authentication* → enable **Allow public client flows** (this
-  enables the device-code login). No client secret — a CLI can't
+  enables the device-code login). No client secret - a CLI can't
   keep one, and the client id is not confidential.
 - *API permissions* → *Microsoft Graph* → *Delegated* → add
   `Mail.Read` (`User.Read` and `offline_access` are granted at
   sign-in automatically).
 
 You (or each user) consent at first login. If your tenant has user
-consent disabled, an admin must approve the `Mail.Read` grant once —
+consent disabled, an admin must approve the `Mail.Read` grant once -
 it is read-only and limited to the signing user's own mailbox.
 
 Then hand the two ids from the registration's overview page to the CLI:
@@ -85,6 +85,39 @@ Then hand the two ids from the registration's overview page to the CLI:
 outlook-scan setup --client-id <application id> --tenant-id <directory id>
 ```
 
+### Joining an existing setup (same tenant, second person)
+
+If a colleague already set up `outlook-scan` in your tenant, do **not**
+create a second app registration - reuse theirs. Ask them for the two
+ids (neither is a secret: the app is a public client with no client
+secret, single-tenant, and every user's token only ever reaches their
+own mailbox), then:
+
+```
+go install github.com/crux/outlook-scan/cmd/outlook-scan@latest
+outlook-scan setup --client-id <application id> --tenant-id <directory id>
+```
+
+Sign in with your own account at the device-code prompt. You get your
+own mailbox, nobody else's.
+
+If that sign-in says **an admin must approve this request**, your tenant
+does not allow users to consent for themselves. A tenant admin fixes it
+once, for everyone: [Entra admin center](https://entra.microsoft.com) →
+*App registrations* → **All applications** tab (an app created by
+`setup` will not be under *Owned applications*) → the `outlook-scan` app
+→ *API permissions* → check the list shows only `Mail.Read`,
+`User.Read`, `offline_access` → **Grant admin consent**. Then re-run the
+command above.
+
+Notes:
+
+- No local Outlook needed. Outlook-on-the-web users are equally served -
+  the tool talks to the mailbox in the cloud, not to any local client.
+- If `outlook-scan` is "not found" after `go install`, `~/go/bin` is
+  probably not on your PATH: add `export PATH="$HOME/go/bin:$PATH"` to
+  `~/.zshrc` and open a new terminal.
+
 ## Claude Code integration
 
 `skill/SKILL.md` teaches Claude Code the commands and conventions.
@@ -92,11 +125,25 @@ Copy it to `~/.claude/skills/outlook-scan/SKILL.md`, personalize the
 description with your mailbox address, and "check my inbox" works in
 any session.
 
+This works wherever Claude Code runs, including the **Code tab** of the
+Claude desktop app, which reads the same `~/.claude/skills/` and can run
+local commands. The desktop app's Chat tab cannot run local tools, so
+`outlook-scan` is not available there.
+
 ## Security model
 
-- Delegated `Mail.Read` only: the cached refresh token cannot be
-  redeemed for anything beyond reading the signed-in mailbox, because
-  the app registration's consent record contains nothing else.
+- Delegated scopes only, own mailbox only. A read-only install requests
+  `Mail.Read`, so its cached refresh token cannot be redeemed for
+  anything beyond reading that one mailbox. A write install (opt-in,
+  above) requests `Mail.ReadWrite`; the tool only ever calls the
+  reply-draft endpoints, but the token itself is capable of more, which
+  is why write is opt-in and per user.
+- Admins: consenting `Mail.ReadWrite` org-wide makes every user's token
+  write-capable. To keep read-only users genuinely read-only, grant
+  org-wide consent for `Mail.Read` only and let write users consent
+  individually.
+- `Mail.Send` is never requested: the tool cannot send mail, only leave
+  drafts for you to review.
 - Revocation: delete `~/.outlook-scan/token.json` locally; revoke the
   user's sign-in sessions or delete the app registration tenant-side.
 
