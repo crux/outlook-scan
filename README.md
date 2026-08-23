@@ -24,14 +24,16 @@ outlook-scan search [--max N] "query"         server-side full-text search, all 
 outlook-scan get [--save DIR [--attachments]] MESSAGE-ID
 outlook-scan attachments [--save DIR] MESSAGE-ID
 outlook-scan thread [--save DIR] MESSAGE-ID|CONVERSATION-ID
+outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE]
 outlook-scan reply [--all] [--body TEXT|--body-file FILE] MESSAGE-ID   (write mode only; see below)
 ```
 
 ### Read-only by default; opt-in draft writing
 
-The tool is read-only out of the box. To let it create **reply drafts**
-(in-thread, saved to Drafts, **never sent** - you review and send from
-Outlook), enable write mode once:
+The tool is read-only out of the box. To let it create **drafts** - new
+messages (`draft`) and in-thread replies (`reply`), saved to Drafts and
+**never sent**, you review and send from Outlook - enable write mode
+once:
 
 ```
 outlook-scan login --write      # requests Mail.ReadWrite; --read-only reverts
@@ -143,7 +145,7 @@ local commands. The desktop app's Chat tab cannot run local tools, so
   org-wide consent for `Mail.Read` only and let write users consent
   individually.
 - `Mail.Send` is never requested: the tool cannot send mail, only leave
-  drafts for you to review.
+  drafts for you to review. There is also no delete or move command.
 - Revocation: delete `~/.outlook-scan/token.json` locally; revoke the
   user's sign-in sessions or delete the app registration tenant-side.
 

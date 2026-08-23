@@ -211,6 +211,42 @@ type DraftRef struct {
 // CreateReplyDraft creates an in-thread reply draft (createReply or
 // createReplyAll) with comment as the reply text placed above the quoted
 // original. The draft lands in Drafts and is never sent. Needs Mail.ReadWrite.
+// NewDraft describes a message to compose from scratch.
+type NewDraft struct {
+	To      []string
+	Cc      []string
+	Bcc     []string
+	Subject string
+	Body    string
+}
+
+func recipientList(addrs []string) []map[string]any {
+	out := make([]map[string]any, 0, len(addrs))
+	for _, a := range addrs {
+		out = append(out, map[string]any{"emailAddress": map[string]string{"address": a}})
+	}
+	return out
+}
+
+// CreateDraft composes a new draft message in the Drafts folder. It is never
+// sent. Needs Mail.ReadWrite.
+func (c *Client) CreateDraft(n NewDraft) (*DraftRef, error) {
+	payload := map[string]any{
+		"subject":      n.Subject,
+		"body":         map[string]string{"contentType": "Text", "content": n.Body},
+		"toRecipients": recipientList(n.To),
+	}
+	if len(n.Cc) > 0 {
+		payload["ccRecipients"] = recipientList(n.Cc)
+	}
+	if len(n.Bcc) > 0 {
+		payload["bccRecipients"] = recipientList(n.Bcc)
+	}
+	d := &DraftRef{}
+	err := c.Post("/me/messages", payload, d)
+	return d, err
+}
+
 func (c *Client) CreateReplyDraft(messageID string, all bool, comment string) (*DraftRef, error) {
 	action := "createReply"
 	if all {

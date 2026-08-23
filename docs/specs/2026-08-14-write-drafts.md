@@ -28,6 +28,13 @@ keep the org-wide admin consent at Mail.Read only.
 
 ## Behavior
 
+- `draft --to ADDR [--cc ADDR] [--bcc ADDR] [--subject TEXT]
+  [--body TEXT | --body-file FILE | piped stdin]`
+  → `POST /me/messages` with a plain-text body. Address flags repeat or
+  take comma-separated lists; at least one `--to` is required and
+  addresses are sanity-checked for `@` before the call. Graph does not
+  stamp `from` on API-created drafts (Outlook fills it at send time), so
+  `get` shows "(unknown sender)" for them - cosmetic, not a defect.
 - `reply <id> [--all] [--body TEXT | --body-file FILE | piped stdin]`
   → `POST /me/messages/{id}/createReply|createReplyAll` with the text as
   `comment` (placed above the quoted original). The draft lands in Drafts;
@@ -44,7 +51,7 @@ keep the org-wide admin consent at Mail.Read only.
 
 ## Out of scope
 
-Sending (`Mail.Send`) - deliberately never added. Rich/HTML reply bodies
-(v1 uses a plain-text comment; the quoted thread is preserved by Graph).
-New standalone drafts and forwards - easy later additions
-(`POST /me/messages`, `createForward`) if wanted.
+Sending (`Mail.Send`) - deliberately never added, as are delete and move.
+Rich/HTML bodies (plain text only; the quoted thread in replies is
+preserved by Graph). Attachments on drafts, and forwards
+(`createForward`) - both easy later additions if wanted.

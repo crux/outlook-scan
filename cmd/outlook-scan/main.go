@@ -80,6 +80,7 @@ commands:
   get         [flags] <id>    one full message as markdown
   thread      [flags] <id>    whole conversation (by message or conversation id)
   attachments [flags] <id>    list a message's attachments; --save downloads them
+  draft       [flags]         compose a new DRAFT message (never sends; needs write mode)
   reply       [flags] <id>    create an in-thread reply DRAFT (never sends; needs write mode)
 
 flags (login):       --write (enable draft writing, Mail.ReadWrite)  --read-only (revert)
@@ -88,6 +89,7 @@ flags (search):      --max N  --json
 flags (get):         --save DIR  --attachments (with --save: download files too)  --json
 flags (thread):      --save DIR  --json
 flags (attachments): --save DIR  --json
+flags (draft):       --to ADDR  --cc ADDR  --bcc ADDR  --subject TEXT  --body TEXT | --body-file FILE | (piped stdin)
 flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)
 
 Flags come before positional arguments.`)
@@ -108,6 +110,7 @@ func main() {
 		"get":         cmdGet,
 		"thread":      cmdThread,
 		"attachments": cmdAttachments,
+		"draft":       cmdDraft,
 		"reply":       cmdReply,
 	}
 	cmd, ok := cmds[os.Args[1]]
@@ -207,6 +210,68 @@ func cmdLogin(args []string) error {
 		desiredWrite = false
 	}
 	return auth.LoginWith(os.Stdout, desiredWrite)
+}
+
+// addrList collects an address flag that may repeat and/or hold a
+// comma-separated list: --to a@x --to "b@x, c@x".
+type addrList []string
+
+func (l *addrList) String() string { return strings.Join(*l, ", ") }
+
+func (l *addrList) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			*l = append(*l, p)
+		}
+	}
+	return nil
+}
+
+func cmdDraft(args []string) error {
+	fs := flag.NewFlagSet("draft", flag.ExitOnError)
+	var to, cc, bcc addrList
+	fs.Var(&to, "to", "recipient address (repeatable, or comma-separated)")
+	fs.Var(&cc, "cc", "cc address (repeatable, or comma-separated)")
+	fs.Var(&bcc, "bcc", "bcc address (repeatable, or comma-separated)")
+	subject := fs.String("subject", "", "subject line")
+	body := fs.String("body", "", "message text (inline)")
+	bodyFile := fs.String("body-file", "", "read message text from a file")
+	fs.Parse(args)
+
+	auth, err := msauth.Load()
+	if err != nil {
+		return err
+	}
+	if !auth.WriteMode() {
+		return fmt.Errorf("write mode is off - enable it once with: outlook-scan login --write")
+	}
+	if len(to) == 0 {
+		return fmt.Errorf("usage: outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE]")
+	}
+	for _, a := range append(append(append(addrList{}, to...), cc...), bcc...) {
+		if !strings.Contains(a, "@") {
+			return fmt.Errorf("%q does not look like an email address", a)
+		}
+	}
+	text, err := readBodyInput(*body, *bodyFile)
+	if err != nil {
+		return err
+	}
+
+	d, err := graph.New(auth).CreateDraft(graph.NewDraft{
+		To: to, Cc: cc, Bcc: bcc, Subject: *subject, Body: text,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 403") {
+			return fmt.Errorf("permission denied - re-run `outlook-scan login --write` to consent to Mail.ReadWrite: %w", err)
+		}
+		return err
+	}
+	fmt.Printf("Draft to %s created in your Drafts folder - review and send from Outlook.\n", to.String())
+	if d.WebLink != "" {
+		fmt.Println("open:", d.WebLink)
+	}
+	return nil
 }
 
 func cmdReply(args []string) error {
