@@ -39,7 +39,13 @@ keep the org-wide admin consent at Mail.Read only.
   → `POST /me/messages/{id}/createReply|createReplyAll` with the text as
   `comment` (placed above the quoted original). The draft lands in Drafts;
   the command prints its webLink. Never sends.
+- `forward <id> --to ADDR [--cc ADDR] [--bcc ADDR] [--body ...]`
+  → `POST /me/messages/{id}/createForward` with the text as `comment`;
+  cc/bcc ride along in the optional `message` object. Attachments of the
+  original are carried over by Graph automatically. Never sent.
 - 403 → hint to re-run `login --write` (consent to Mail.ReadWrite).
+- 404 `ErrorItemNotFound` on a write to an existing message usually means
+  a stale id: Graph ids change when a message moves between folders.
 
 ## Graph / app registration
 
@@ -52,6 +58,7 @@ keep the org-wide admin consent at Mail.Read only.
 ## Out of scope
 
 Sending (`Mail.Send`) - deliberately never added, as are delete and move.
-Rich/HTML bodies (plain text only; the quoted thread in replies is
-preserved by Graph). Attachments on drafts, and forwards
-(`createForward`) - both easy later additions if wanted.
+Rich/HTML bodies (plain text only; the quoted thread in replies and
+forwards is preserved by Graph). Adding attachments to a draft
+(`POST /me/messages/{id}/attachments`) - an easy later addition if
+wanted.

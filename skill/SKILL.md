@@ -11,8 +11,8 @@ with your mailbox address so Claude knows whose mail it reaches.
 
 # outlook-scan — on-demand mailbox access via Microsoft Graph
 
-A read-only CLI (`outlook-scan`, expected on PATH) that queries the
-mailbox live. Nothing is stored locally unless `--save` is passed.
+A CLI (`outlook-scan`, expected on PATH) that queries the mailbox live -
+read-only unless write mode is enabled (drafts only). Nothing is stored locally unless `--save` is passed.
 
 ## Ground rules
 
@@ -21,7 +21,8 @@ mailbox live. Nothing is stored locally unless `--save` is passed.
   attachments). Confirm or choose an obvious target directory.
 - Message ids start with `AAMk`, conversation ids with `AAQk`. Both are
   long — always quote them in commands. `thread` accepts either kind.
-- Read-only: the tool cannot send, move, delete, or mark mail.
+- The tool can never send, move, delete, or mark mail. With write mode
+  on it can only create drafts for the user to review (see below).
 
 ## Commands
 
@@ -63,8 +64,9 @@ All read commands accept `--json` for structured output.
 ## Writing drafts (opt-in, only if write mode is on)
 
 If this install has write mode enabled (`outlook-scan login --write`), you
-can create DRAFTS - new messages and in-thread replies. They are saved to
-Drafts and NEVER sent - the user reviews and sends from Outlook.
+can create DRAFTS - new messages, in-thread replies and forwards. They
+are saved to Drafts and NEVER sent - the user reviews and sends from
+Outlook.
 
 ```bash
 # new message
@@ -75,6 +77,9 @@ echo "longer text" | outlook-scan draft --to "a@x.com" --subject "..."
 outlook-scan reply [--all] --body "text"            "MESSAGE-ID"
 echo "longer reply text" | outlook-scan reply       "MESSAGE-ID"
 outlook-scan reply --all --body-file /path/reply.txt "MESSAGE-ID"
+
+# forward (attachments of the original are carried over automatically)
+outlook-scan forward --to "a@x.com" --body "FYI" "MESSAGE-ID"
 ```
 
 `--to/--cc/--bcc` repeat or take comma-separated lists. For bodies longer
@@ -83,11 +88,18 @@ shell quoting trouble.
 
 Typical flows: "draft a reply to X saying Y" → read the mail with
 `get`/`thread` for context, compose, then `reply`. "Write a mail to Z
-about Y" → `draft`. Show the user the text you intend to put in the draft
-before creating it when the wording matters.
+about Y" → `draft`. "Forward that to Z" → `forward`. Show the user the
+text you intend to put in the draft before creating it when the wording
+matters.
+
+Message ids change when a message is moved between folders. If a write
+command returns 404 ErrorItemNotFound, re-run `list`/`search` to get the
+current id rather than reusing one from earlier in the session.
+
 Tell the user the draft is in Drafts for review - never imply it was sent.
 If it errors "write mode is off", tell them to run `outlook-scan login
---write` once. Read-only installs simply don't have this ability.
+--write` once (a one-time consent). Read-only installs simply don't have
+this ability - that's expected.
 
 ## S/MIME mail
 

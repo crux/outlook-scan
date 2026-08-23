@@ -82,6 +82,7 @@ commands:
   attachments [flags] <id>    list a message's attachments; --save downloads them
   draft       [flags]         compose a new DRAFT message (never sends; needs write mode)
   reply       [flags] <id>    create an in-thread reply DRAFT (never sends; needs write mode)
+  forward     [flags] <id>    create a forward DRAFT, attachments included (never sends)
 
 flags (login):       --write (enable draft writing, Mail.ReadWrite)  --read-only (revert)
 flags (list):        --folder NAME  --unread  --since 7d|2w|2026-01-15  --max N  --json
@@ -91,6 +92,7 @@ flags (thread):      --save DIR  --json
 flags (attachments): --save DIR  --json
 flags (draft):       --to ADDR  --cc ADDR  --bcc ADDR  --subject TEXT  --body TEXT | --body-file FILE | (piped stdin)
 flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)
+flags (forward):     --to ADDR  --cc ADDR  --bcc ADDR  --body TEXT | --body-file FILE | (piped stdin)
 
 Flags come before positional arguments.`)
 }
@@ -112,6 +114,7 @@ func main() {
 		"attachments": cmdAttachments,
 		"draft":       cmdDraft,
 		"reply":       cmdReply,
+		"forward":     cmdForward,
 	}
 	cmd, ok := cmds[os.Args[1]]
 	if !ok {
@@ -227,6 +230,78 @@ func (l *addrList) Set(v string) error {
 	return nil
 }
 
+// checkAddrs rejects anything that clearly is not an email address before a
+// draft is created from it.
+func checkAddrs(lists ...addrList) error {
+	for _, l := range lists {
+		for _, a := range l {
+			if !strings.Contains(a, "@") {
+				return fmt.Errorf("%q does not look like an email address", a)
+			}
+		}
+	}
+	return nil
+}
+
+// writeAuth loads the session and enforces the opt-in write gate.
+func writeAuth() (*msauth.Auth, error) {
+	auth, err := msauth.Load()
+	if err != nil {
+		return nil, err
+	}
+	if !auth.WriteMode() {
+		return nil, fmt.Errorf("write mode is off - enable it once with: outlook-scan login --write")
+	}
+	return auth, nil
+}
+
+// draftError adds a consent hint to permission failures.
+func draftError(err error) error {
+	if strings.Contains(err.Error(), "HTTP 403") {
+		return fmt.Errorf("permission denied - re-run `outlook-scan login --write` to consent to Mail.ReadWrite: %w", err)
+	}
+	return err
+}
+
+// reportDraft prints the standard confirmation for a created draft.
+func reportDraft(what string, d *graph.DraftRef) {
+	fmt.Printf("Draft %s created in your Drafts folder - review and send from Outlook.\n", what)
+	if d.WebLink != "" {
+		fmt.Println("open:", d.WebLink)
+	}
+}
+
+func cmdForward(args []string) error {
+	fs := flag.NewFlagSet("forward", flag.ExitOnError)
+	var to, cc, bcc addrList
+	fs.Var(&to, "to", "recipient address (repeatable, or comma-separated)")
+	fs.Var(&cc, "cc", "cc address (repeatable, or comma-separated)")
+	fs.Var(&bcc, "bcc", "bcc address (repeatable, or comma-separated)")
+	body := fs.String("body", "", "comment placed above the forwarded message")
+	bodyFile := fs.String("body-file", "", "read the comment from a file")
+	fs.Parse(args)
+	if fs.NArg() != 1 || len(to) == 0 {
+		return fmt.Errorf("usage: outlook-scan forward --to ADDR [--cc ADDR] [--bcc ADDR] [--body TEXT|--body-file FILE] <message-id>")
+	}
+	if err := checkAddrs(to, cc, bcc); err != nil {
+		return err
+	}
+	auth, err := writeAuth()
+	if err != nil {
+		return err
+	}
+	text, err := readBodyInput(*body, *bodyFile)
+	if err != nil {
+		return err
+	}
+	d, err := graph.New(auth).CreateForwardDraft(fs.Arg(0), to, cc, bcc, text)
+	if err != nil {
+		return draftError(err)
+	}
+	reportDraft("forward to "+to.String(), d)
+	return nil
+}
+
 func cmdDraft(args []string) error {
 	fs := flag.NewFlagSet("draft", flag.ExitOnError)
 	var to, cc, bcc addrList
@@ -238,20 +313,15 @@ func cmdDraft(args []string) error {
 	bodyFile := fs.String("body-file", "", "read message text from a file")
 	fs.Parse(args)
 
-	auth, err := msauth.Load()
-	if err != nil {
-		return err
-	}
-	if !auth.WriteMode() {
-		return fmt.Errorf("write mode is off - enable it once with: outlook-scan login --write")
-	}
 	if len(to) == 0 {
 		return fmt.Errorf("usage: outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE]")
 	}
-	for _, a := range append(append(append(addrList{}, to...), cc...), bcc...) {
-		if !strings.Contains(a, "@") {
-			return fmt.Errorf("%q does not look like an email address", a)
-		}
+	if err := checkAddrs(to, cc, bcc); err != nil {
+		return err
+	}
+	auth, err := writeAuth()
+	if err != nil {
+		return err
 	}
 	text, err := readBodyInput(*body, *bodyFile)
 	if err != nil {
@@ -262,15 +332,9 @@ func cmdDraft(args []string) error {
 		To: to, Cc: cc, Bcc: bcc, Subject: *subject, Body: text,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "HTTP 403") {
-			return fmt.Errorf("permission denied - re-run `outlook-scan login --write` to consent to Mail.ReadWrite: %w", err)
-		}
-		return err
+		return draftError(err)
 	}
-	fmt.Printf("Draft to %s created in your Drafts folder - review and send from Outlook.\n", to.String())
-	if d.WebLink != "" {
-		fmt.Println("open:", d.WebLink)
-	}
+	reportDraft("to "+to.String(), d)
 	return nil
 }
 
@@ -283,12 +347,9 @@ func cmdReply(args []string) error {
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: outlook-scan reply [--all] [--body TEXT|--body-file FILE] <message-id>")
 	}
-	auth, err := msauth.Load()
+	auth, err := writeAuth()
 	if err != nil {
 		return err
-	}
-	if !auth.WriteMode() {
-		return fmt.Errorf("write mode is off - enable it once with: outlook-scan login --write")
 	}
 	text, err := readBodyInput(*body, *bodyFile)
 	if err != nil {
@@ -299,19 +360,13 @@ func cmdReply(args []string) error {
 	}
 	d, err := graph.New(auth).CreateReplyDraft(fs.Arg(0), *all, text)
 	if err != nil {
-		if strings.Contains(err.Error(), "HTTP 403") {
-			return fmt.Errorf("permission denied - re-run `outlook-scan login --write` to consent to Mail.ReadWrite: %w", err)
-		}
-		return err
+		return draftError(err)
 	}
 	kind := "reply"
 	if *all {
 		kind = "reply-all"
 	}
-	fmt.Printf("Draft %s created in your Drafts folder - review and send from Outlook.\n", kind)
-	if d.WebLink != "" {
-		fmt.Println("open:", d.WebLink)
-	}
+	reportDraft(kind, d)
 	return nil
 }
 

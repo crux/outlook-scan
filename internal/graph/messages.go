@@ -258,6 +258,29 @@ func (c *Client) CreateReplyDraft(messageID string, all bool, comment string) (*
 	return d, err
 }
 
+// CreateForwardDraft creates a forward draft of messageID to the given
+// recipients, with comment placed above the forwarded message. Attachments of
+// the original are carried over by Graph. Never sent. Needs Mail.ReadWrite.
+func (c *Client) CreateForwardDraft(messageID string, to, cc, bcc []string, comment string) (*DraftRef, error) {
+	payload := map[string]any{
+		"comment":      comment,
+		"toRecipients": recipientList(to),
+	}
+	msg := map[string]any{}
+	if len(cc) > 0 {
+		msg["ccRecipients"] = recipientList(cc)
+	}
+	if len(bcc) > 0 {
+		msg["bccRecipients"] = recipientList(bcc)
+	}
+	if len(msg) > 0 {
+		payload["message"] = msg
+	}
+	d := &DraftRef{}
+	err := c.Post("/me/messages/"+url.PathEscape(messageID)+"/createForward", payload, d)
+	return d, err
+}
+
 func (c *Client) pageMessages(path string, maxN int) ([]Message, error) {
 	var out []Message
 	for path != "" && len(out) < maxN {

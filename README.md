@@ -26,14 +26,15 @@ outlook-scan attachments [--save DIR] MESSAGE-ID
 outlook-scan thread [--save DIR] MESSAGE-ID|CONVERSATION-ID
 outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE]
 outlook-scan reply [--all] [--body TEXT|--body-file FILE] MESSAGE-ID   (write mode only; see below)
+outlook-scan forward --to ADDR [--cc ADDR] [--body TEXT|--body-file FILE] MESSAGE-ID
 ```
 
 ### Read-only by default; opt-in draft writing
 
 The tool is read-only out of the box. To let it create **drafts** - new
-messages (`draft`) and in-thread replies (`reply`), saved to Drafts and
-**never sent**, you review and send from Outlook - enable write mode
-once:
+messages (`draft`), in-thread replies (`reply`) and forwards
+(`forward`), saved to Drafts and **never sent**, you review and send
+from Outlook - enable write mode once:
 
 ```
 outlook-scan login --write      # requests Mail.ReadWrite; --read-only reverts
