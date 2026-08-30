@@ -25,8 +25,8 @@ outlook-scan get [--save DIR [--attachments]] MESSAGE-ID
 outlook-scan attachments [--save DIR] MESSAGE-ID
 outlook-scan thread [--save DIR] MESSAGE-ID|CONVERSATION-ID
 outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE] [--html]
-outlook-scan reply [--all] [--body TEXT|--body-file FILE] [--html] MESSAGE-ID   (write mode only)
-outlook-scan forward --to ADDR [--cc ADDR] [--body TEXT|--body-file FILE] [--html] MESSAGE-ID
+outlook-scan reply [--all] [--body TEXT|--body-file FILE] [--html|--plain] MESSAGE-ID   (write mode only)
+outlook-scan forward --to ADDR [--cc ADDR] [--body TEXT|--body-file FILE] [--html|--plain] MESSAGE-ID
 ```
 
 ### Read-only by default; opt-in draft writing
@@ -43,6 +43,14 @@ outlook-scan login --write      # requests Mail.ReadWrite; --read-only reverts
 Draft text is plain by default and keeps its line breaks; `--html` passes
 it through as HTML instead (`<p>`, `<b>`, lists, links), placed above the
 quoted original for replies and forwards.
+
+New messages (`draft`) are true `text/plain` unless `--html` is given.
+Replies and forwards are built by Exchange, which always makes them HTML
+- `--plain` overrides that and writes a real `text/plain` draft instead,
+converting the original to text and quoting it with `> `, the way mail
+worked before HTML. Useful for mailing lists, ticket systems, or simply
+if you prefer plain mail and never found the opt-out in any Outlook
+client.
 
 Trade-off: Microsoft has no drafts-only scope, so write mode grants
 `Mail.ReadWrite` (full mailbox read/write). It is opt-in per install;

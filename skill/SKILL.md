@@ -81,13 +81,19 @@ outlook-scan reply --all --body-file /path/reply.txt "MESSAGE-ID"
 
 # forward (attachments of the original are carried over automatically)
 outlook-scan forward --to "a@x.com" --body "FYI" "MESSAGE-ID"
+
+# force a real text/plain reply or forward, quoting the original with "> "
+outlook-scan reply --plain --body "text" "MESSAGE-ID"
 ```
 
 `--to/--cc/--bcc` repeat or take comma-separated lists. For bodies longer
 than a line or two, prefer piping/`--body-file` over `--body` to avoid
 shell quoting trouble.
 
-Text is plain by default; line breaks are preserved. Add `--html` (all
+Text is plain by default; line breaks are preserved. `draft` produces a
+true text/plain message. Exchange always builds reply/forward bodies as
+HTML - pass `--plain` to override that and get a real text/plain draft
+with "> " quoting (mutually exclusive with `--html`). Add `--html` (all
 three commands) when the draft should carry formatting - then the text
 must be HTML, e.g. `--html --body "<p>Hi <b>there</b></p>"`. Do not mix:
 plain text passed with `--html` loses its line breaks, and HTML passed

@@ -92,10 +92,12 @@ flags (get):         --save DIR  --attachments (with --save: download files too)
 flags (thread):      --save DIR  --json
 flags (attachments): --save DIR  --json
 flags (draft):       --to ADDR  --cc ADDR  --bcc ADDR  --subject TEXT  --body TEXT | --body-file FILE | (piped stdin)  --html
-flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)  --html
-flags (forward):     --to ADDR  --cc ADDR  --bcc ADDR  --body TEXT | --body-file FILE | (piped stdin)  --html
+flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)  --html  --plain
+flags (forward):     --to ADDR  --cc ADDR  --bcc ADDR  --body TEXT | --body-file FILE | (piped stdin)  --html  --plain
 
-Draft text is plain by default; --html sends it through as HTML.
+Draft text is plain by default; --html sends it through as HTML. Outlook
+builds reply/forward bodies as HTML - --plain overrides that and writes a
+real text/plain draft, quoting the original with "> ".
 
 Flags come before positional arguments.`)
 }
@@ -293,6 +295,110 @@ func mergeIntoDraft(existing *graph.ItemBody, text string, asHTML bool) (content
 	return "HTML", frag + quoted
 }
 
+// cleanText normalizes a body that Graph converted from HTML: CRLF to LF,
+// no trailing whitespace, and at most one blank line in a row.
+func cleanText(s string) string {
+	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	blank := 0
+	for _, l := range lines {
+		l = strings.TrimRight(l, " \t ")
+		if l == "" {
+			blank++
+			if blank > 1 {
+				continue
+			}
+		} else {
+			blank = 0
+		}
+		out = append(out, l)
+	}
+	return strings.Trim(strings.Join(out, "\n"), "\n")
+}
+
+// quote prefixes every line the way plain-text mail has always done it.
+func quote(s string) string {
+	lines := strings.Split(cleanText(s), "\n")
+	for i, l := range lines {
+		if l == "" {
+			lines[i] = ">"
+		} else {
+			lines[i] = "> " + l
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// fetchForQuote loads the original message with its body as plain text,
+// unwrapping opaque S/MIME so signed mail can be quoted too.
+func fetchForQuote(c *graph.Client, id string) (*graph.Message, error) {
+	m, err := c.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if m.HasAttachments {
+		if atts, err := c.Attachments(m.ID); err == nil {
+			if sv := maybeUnwrapSMIME(c, m, atts); sv != nil {
+				applySMIME(m, sv)
+			}
+		}
+	}
+	return m, nil
+}
+
+func bodyText(m *graph.Message) string {
+	if m.Body == nil {
+		return ""
+	}
+	return m.Body.Content
+}
+
+// plainReplyBody builds a classic plain-text reply: our text, an attribution
+// line, then the original quoted with "> ".
+func plainReplyBody(m *graph.Message, text string) string {
+	var b strings.Builder
+	b.WriteString(cleanText(text))
+	b.WriteString("\n\n")
+	sender := "the sender"
+	if m.From != nil {
+		sender = m.From.String()
+	}
+	fmt.Fprintf(&b, "On %s, %s wrote:\n", m.Received.Local().Format("2006-01-02 15:04"), sender)
+	b.WriteString(quote(bodyText(m)))
+	b.WriteString("\n")
+	return b.String()
+}
+
+// plainForwardBody builds a classic plain-text forward with a header block.
+func plainForwardBody(m *graph.Message, text string) string {
+	var b strings.Builder
+	if t := cleanText(text); t != "" {
+		b.WriteString(t)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("---------- Forwarded message ----------\n")
+	if m.From != nil {
+		fmt.Fprintf(&b, "From: %s\n", m.From.String())
+	}
+	fmt.Fprintf(&b, "Date: %s\n", m.Received.Local().Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "Subject: %s\n", m.Subject)
+	if len(m.To) > 0 {
+		fmt.Fprintf(&b, "To: %s\n", recipientsLine(m.To))
+	}
+	b.WriteString("\n")
+	b.WriteString(cleanText(bodyText(m)))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func recipientsLine(rs []graph.Recipient) string {
+	parts := make([]string, len(rs))
+	for i, r := range rs {
+		parts[i] = r.String()
+	}
+	return strings.Join(parts, ", ")
+}
+
 // draftError adds a consent hint to permission failures.
 func draftError(err error) error {
 	if strings.Contains(err.Error(), "HTTP 403") {
@@ -318,7 +424,11 @@ func cmdForward(args []string) error {
 	body := fs.String("body", "", "comment placed above the forwarded message")
 	bodyFile := fs.String("body-file", "", "read the comment from a file")
 	asHTML := fs.Bool("html", false, "treat the text as HTML instead of plain text")
+	plain := fs.Bool("plain", false, "force a real plain-text forward")
 	fs.Parse(args)
+	if *asHTML && *plain {
+		return fmt.Errorf("--html and --plain are mutually exclusive")
+	}
 	if fs.NArg() != 1 || len(to) == 0 {
 		return fmt.Errorf("usage: outlook-scan forward --to ADDR [--cc ADDR] [--bcc ADDR] [--body TEXT|--body-file FILE] <message-id>")
 	}
@@ -338,7 +448,15 @@ func cmdForward(args []string) error {
 	if err != nil {
 		return draftError(err)
 	}
-	if strings.TrimSpace(text) != "" {
+	if *plain {
+		orig, err := fetchForQuote(c, fs.Arg(0))
+		if err != nil {
+			return fmt.Errorf("draft created but the original could not be read for quoting (%s): %w", d.ID, err)
+		}
+		if err := c.UpdateBody(d.ID, "Text", plainForwardBody(orig, text)); err != nil {
+			return fmt.Errorf("draft created but its text could not be written (%s): %w", d.ID, err)
+		}
+	} else if strings.TrimSpace(text) != "" {
 		ct, content := mergeIntoDraft(d.Body, text, *asHTML)
 		if err := c.UpdateBody(d.ID, ct, content); err != nil {
 			return fmt.Errorf("draft created but its text could not be written (%s): %w", d.ID, err)
@@ -391,7 +509,11 @@ func cmdReply(args []string) error {
 	body := fs.String("body", "", "reply text (inline)")
 	bodyFile := fs.String("body-file", "", "read reply text from a file")
 	asHTML := fs.Bool("html", false, "treat the text as HTML instead of plain text")
+	plain := fs.Bool("plain", false, "force a real plain-text reply, quoting the original with \"> \"")
 	fs.Parse(args)
+	if *asHTML && *plain {
+		return fmt.Errorf("--html and --plain are mutually exclusive")
+	}
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: outlook-scan reply [--all] [--body TEXT|--body-file FILE] <message-id>")
 	}
@@ -411,7 +533,16 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return draftError(err)
 	}
-	ct, content := mergeIntoDraft(d.Body, text, *asHTML)
+	var ct, content string
+	if *plain {
+		orig, err := fetchForQuote(c, fs.Arg(0))
+		if err != nil {
+			return fmt.Errorf("draft created but the original could not be read for quoting (%s): %w", d.ID, err)
+		}
+		ct, content = "Text", plainReplyBody(orig, text)
+	} else {
+		ct, content = mergeIntoDraft(d.Body, text, *asHTML)
+	}
 	if err := c.UpdateBody(d.ID, ct, content); err != nil {
 		return fmt.Errorf("draft created but its text could not be written (%s): %w", d.ID, err)
 	}

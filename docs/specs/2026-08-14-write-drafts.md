@@ -52,6 +52,17 @@ keep the org-wide admin consent at Mail.Read only.
   builds reply/forward bodies as HTML, so raw newlines would otherwise
   collapse into a single paragraph (this was a real defect in the first
   reply implementation, which passed the text as `comment`).
+- `--plain` on reply/forward: Exchange always returns an HTML body for
+  createReply/createForward, so there is no way to ask it for a
+  text/plain reply. Instead the draft body is replaced wholesale: fetch
+  the original (Prefer text, so Graph does the HTML→text conversion
+  server-side, plus local S/MIME unwrapping), normalize it (CRLF→LF, no
+  trailing whitespace, at most one blank line in a row), then PATCH
+  `contentType: Text` with our text, an attribution line
+  ("On <date>, <sender> wrote:") and the original quoted with "> ".
+  Forwards get the classic "---------- Forwarded message ----------"
+  header block; attachments are untouched by the body PATCH.
+  Mutually exclusive with `--html`.
 - 403 → hint to re-run `login --write` (consent to Mail.ReadWrite).
 - 404 `ErrorItemNotFound` on a write to an existing message usually means
   a stale id: Graph ids change when a message moves between folders.
