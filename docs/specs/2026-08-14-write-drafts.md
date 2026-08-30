@@ -36,13 +36,22 @@ keep the org-wide admin consent at Mail.Read only.
   stamp `from` on API-created drafts (Outlook fills it at send time), so
   `get` shows "(unknown sender)" for them - cosmetic, not a defect.
 - `reply <id> [--all] [--body TEXT | --body-file FILE | piped stdin]`
-  → `POST /me/messages/{id}/createReply|createReplyAll` with the text as
-  `comment` (placed above the quoted original). The draft lands in Drafts;
-  the command prints its webLink. Never sends.
+  → `POST /me/messages/{id}/createReply|createReplyAll` (no `comment`),
+  then PATCH the body with our text merged above the quoted original.
+  The draft lands in Drafts; the command prints its webLink. Never sends.
 - `forward <id> --to ADDR [--cc ADDR] [--bcc ADDR] [--body ...]`
-  → `POST /me/messages/{id}/createForward` with the text as `comment`;
-  cc/bcc ride along in the optional `message` object. Attachments of the
+  → `POST /me/messages/{id}/createForward`; cc/bcc ride along in the
+  optional `message` object, body merged as above. Attachments of the
   original are carried over by Graph automatically. Never sent.
+- `--html` on draft/reply/forward: the text is HTML instead of plain.
+  New drafts set `body.contentType: HTML`. For reply/forward the draft is
+  created **without** a comment, and its body (returned by the create
+  call, so no extra GET) is then merged and PATCHed: our fragment is
+  inserted right after `<body...>`, above Graph's quoted original.
+  Plain text is HTML-escaped with newlines converted to `<br>` - Graph
+  builds reply/forward bodies as HTML, so raw newlines would otherwise
+  collapse into a single paragraph (this was a real defect in the first
+  reply implementation, which passed the text as `comment`).
 - 403 → hint to re-run `login --write` (consent to Mail.ReadWrite).
 - 404 `ErrorItemNotFound` on a write to an existing message usually means
   a stale id: Graph ids change when a message moves between folders.
@@ -58,7 +67,6 @@ keep the org-wide admin consent at Mail.Read only.
 ## Out of scope
 
 Sending (`Mail.Send`) - deliberately never added, as are delete and move.
-Rich/HTML bodies (plain text only; the quoted thread in replies and
-forwards is preserved by Graph). Adding attachments to a draft
+Adding attachments to a draft
 (`POST /me/messages/{id}/attachments`) - an easy later addition if
 wanted.

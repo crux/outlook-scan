@@ -89,6 +89,15 @@ func (c *Client) GetJSON(path string, v any) error {
 // Post sends a JSON body to base+path and decodes any JSON response into out
 // (out may be nil). Same auth/retry behavior as GetRaw.
 func (c *Client) Post(path string, in, out any) error {
+	return c.send(http.MethodPost, path, in, out)
+}
+
+// Patch updates a resource at base+path.
+func (c *Client) Patch(path string, in, out any) error {
+	return c.send(http.MethodPatch, path, in, out)
+}
+
+func (c *Client) send(method, path string, in, out any) error {
 	raw, err := json.Marshal(in)
 	if err != nil {
 		return err
@@ -98,7 +107,7 @@ func (c *Client) Post(path string, in, out any) error {
 		if err != nil {
 			return err
 		}
-		req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(raw))
+		req, err := http.NewRequest(method, base+path, bytes.NewReader(raw))
 		if err != nil {
 			return err
 		}
@@ -131,7 +140,7 @@ func (c *Client) Post(path string, in, out any) error {
 		case resp.StatusCode == http.StatusUnauthorized && attempt == 0:
 			continue
 		default:
-			return fmt.Errorf("POST %s: HTTP %d: %s", path, resp.StatusCode, truncate(body, 300))
+			return fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, truncate(body, 300))
 		}
 	}
 }

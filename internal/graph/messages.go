@@ -202,15 +202,27 @@ func (c *Client) Thread(conversationID string) ([]Message, error) {
 	return msgs, nil
 }
 
-// DraftRef points at a created draft message.
+// DraftRef points at a created draft message. Body is filled by Graph on
+// create and tells us whether the draft is HTML or plain text.
 type DraftRef struct {
-	ID      string `json:"id"`
-	WebLink string `json:"webLink"`
+	ID      string    `json:"id"`
+	WebLink string    `json:"webLink"`
+	Body    *ItemBody `json:"body,omitempty"`
 }
 
-// CreateReplyDraft creates an in-thread reply draft (createReply or
-// createReplyAll) with comment as the reply text placed above the quoted
-// original. The draft lands in Drafts and is never sent. Needs Mail.ReadWrite.
+// IsHTML reports whether the draft body is HTML (the usual case).
+func (d *DraftRef) IsHTML() bool {
+	return d.Body != nil && strings.EqualFold(d.Body.ContentType, "html")
+}
+
+// UpdateBody replaces a draft's body.
+func (c *Client) UpdateBody(draftID, contentType, content string) error {
+	return c.Patch("/me/messages/"+url.PathEscape(draftID),
+		map[string]any{"body": map[string]string{
+			"contentType": contentType, "content": content,
+		}}, nil)
+}
+
 // NewDraft describes a message to compose from scratch.
 type NewDraft struct {
 	To      []string
@@ -218,6 +230,7 @@ type NewDraft struct {
 	Bcc     []string
 	Subject string
 	Body    string
+	HTML    bool // treat Body as HTML instead of plain text
 }
 
 func recipientList(addrs []string) []map[string]any {
@@ -231,9 +244,13 @@ func recipientList(addrs []string) []map[string]any {
 // CreateDraft composes a new draft message in the Drafts folder. It is never
 // sent. Needs Mail.ReadWrite.
 func (c *Client) CreateDraft(n NewDraft) (*DraftRef, error) {
+	ct := "Text"
+	if n.HTML {
+		ct = "HTML"
+	}
 	payload := map[string]any{
 		"subject":      n.Subject,
-		"body":         map[string]string{"contentType": "Text", "content": n.Body},
+		"body":         map[string]string{"contentType": ct, "content": n.Body},
 		"toRecipients": recipientList(n.To),
 	}
 	if len(n.Cc) > 0 {
@@ -247,23 +264,26 @@ func (c *Client) CreateDraft(n NewDraft) (*DraftRef, error) {
 	return d, err
 }
 
-func (c *Client) CreateReplyDraft(messageID string, all bool, comment string) (*DraftRef, error) {
+// CreateReplyDraft creates an in-thread reply draft. The returned body holds
+// the quoted original; the caller merges its own text in via UpdateBody. The
+// draft lands in Drafts and is never sent. Needs Mail.ReadWrite.
+func (c *Client) CreateReplyDraft(messageID string, all bool) (*DraftRef, error) {
 	action := "createReply"
 	if all {
 		action = "createReplyAll"
 	}
 	d := &DraftRef{}
 	err := c.Post("/me/messages/"+url.PathEscape(messageID)+"/"+action,
-		map[string]string{"comment": comment}, d)
+		map[string]any{}, d)
 	return d, err
 }
 
 // CreateForwardDraft creates a forward draft of messageID to the given
-// recipients, with comment placed above the forwarded message. Attachments of
-// the original are carried over by Graph. Never sent. Needs Mail.ReadWrite.
-func (c *Client) CreateForwardDraft(messageID string, to, cc, bcc []string, comment string) (*DraftRef, error) {
+// recipients. The body arrives holding the quoted original; the caller merges
+// its own text in via UpdateBody. Attachments of the original are carried over
+// by Graph. Never sent. Needs Mail.ReadWrite.
+func (c *Client) CreateForwardDraft(messageID string, to, cc, bcc []string) (*DraftRef, error) {
 	payload := map[string]any{
-		"comment":      comment,
 		"toRecipients": recipientList(to),
 	}
 	msg := map[string]any{}

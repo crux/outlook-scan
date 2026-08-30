@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"strconv"
@@ -90,9 +91,11 @@ flags (search):      --max N  --json
 flags (get):         --save DIR  --attachments (with --save: download files too)  --json
 flags (thread):      --save DIR  --json
 flags (attachments): --save DIR  --json
-flags (draft):       --to ADDR  --cc ADDR  --bcc ADDR  --subject TEXT  --body TEXT | --body-file FILE | (piped stdin)
-flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)
-flags (forward):     --to ADDR  --cc ADDR  --bcc ADDR  --body TEXT | --body-file FILE | (piped stdin)
+flags (draft):       --to ADDR  --cc ADDR  --bcc ADDR  --subject TEXT  --body TEXT | --body-file FILE | (piped stdin)  --html
+flags (reply):       --all (reply to all)  --body TEXT | --body-file FILE | (piped stdin)  --html
+flags (forward):     --to ADDR  --cc ADDR  --bcc ADDR  --body TEXT | --body-file FILE | (piped stdin)  --html
+
+Draft text is plain by default; --html sends it through as HTML.
 
 Flags come before positional arguments.`)
 }
@@ -255,6 +258,41 @@ func writeAuth() (*msauth.Auth, error) {
 	return auth, nil
 }
 
+// textToHTML escapes plain text for insertion into an HTML body and keeps
+// its line breaks. Graph builds reply/forward bodies as HTML, so raw newlines
+// would otherwise collapse into one paragraph.
+func textToHTML(s string) string {
+	return strings.ReplaceAll(html.EscapeString(strings.ReplaceAll(s, "\r\n", "\n")), "\n", "<br>")
+}
+
+// mergeIntoDraft returns the new body for a reply/forward draft: the user's
+// text placed above the quoted original that Graph generated.
+func mergeIntoDraft(existing *graph.ItemBody, text string, asHTML bool) (contentType, content string) {
+	quoted := ""
+	if existing != nil {
+		quoted = existing.Content
+	}
+	if existing != nil && strings.EqualFold(existing.ContentType, "text") && !asHTML {
+		return "Text", text + "\n\n" + quoted
+	}
+	// HTML body (the usual case). A plain-text quote combined with --html is
+	// escaped so the whole body can become HTML.
+	frag := text
+	if !asHTML {
+		frag = textToHTML(text)
+	}
+	if existing != nil && strings.EqualFold(existing.ContentType, "text") {
+		quoted = textToHTML(quoted)
+	}
+	if i := strings.Index(strings.ToLower(quoted), "<body"); i >= 0 {
+		if j := strings.Index(quoted[i:], ">"); j >= 0 {
+			cut := i + j + 1
+			return "HTML", quoted[:cut] + frag + quoted[cut:]
+		}
+	}
+	return "HTML", frag + quoted
+}
+
 // draftError adds a consent hint to permission failures.
 func draftError(err error) error {
 	if strings.Contains(err.Error(), "HTTP 403") {
@@ -279,6 +317,7 @@ func cmdForward(args []string) error {
 	fs.Var(&bcc, "bcc", "bcc address (repeatable, or comma-separated)")
 	body := fs.String("body", "", "comment placed above the forwarded message")
 	bodyFile := fs.String("body-file", "", "read the comment from a file")
+	asHTML := fs.Bool("html", false, "treat the text as HTML instead of plain text")
 	fs.Parse(args)
 	if fs.NArg() != 1 || len(to) == 0 {
 		return fmt.Errorf("usage: outlook-scan forward --to ADDR [--cc ADDR] [--bcc ADDR] [--body TEXT|--body-file FILE] <message-id>")
@@ -294,9 +333,16 @@ func cmdForward(args []string) error {
 	if err != nil {
 		return err
 	}
-	d, err := graph.New(auth).CreateForwardDraft(fs.Arg(0), to, cc, bcc, text)
+	c := graph.New(auth)
+	d, err := c.CreateForwardDraft(fs.Arg(0), to, cc, bcc)
 	if err != nil {
 		return draftError(err)
+	}
+	if strings.TrimSpace(text) != "" {
+		ct, content := mergeIntoDraft(d.Body, text, *asHTML)
+		if err := c.UpdateBody(d.ID, ct, content); err != nil {
+			return fmt.Errorf("draft created but its text could not be written (%s): %w", d.ID, err)
+		}
 	}
 	reportDraft("forward to "+to.String(), d)
 	return nil
@@ -311,6 +357,7 @@ func cmdDraft(args []string) error {
 	subject := fs.String("subject", "", "subject line")
 	body := fs.String("body", "", "message text (inline)")
 	bodyFile := fs.String("body-file", "", "read message text from a file")
+	asHTML := fs.Bool("html", false, "treat the text as HTML instead of plain text")
 	fs.Parse(args)
 
 	if len(to) == 0 {
@@ -329,7 +376,7 @@ func cmdDraft(args []string) error {
 	}
 
 	d, err := graph.New(auth).CreateDraft(graph.NewDraft{
-		To: to, Cc: cc, Bcc: bcc, Subject: *subject, Body: text,
+		To: to, Cc: cc, Bcc: bcc, Subject: *subject, Body: text, HTML: *asHTML,
 	})
 	if err != nil {
 		return draftError(err)
@@ -343,6 +390,7 @@ func cmdReply(args []string) error {
 	all := fs.Bool("all", false, "reply to all recipients")
 	body := fs.String("body", "", "reply text (inline)")
 	bodyFile := fs.String("body-file", "", "read reply text from a file")
+	asHTML := fs.Bool("html", false, "treat the text as HTML instead of plain text")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: outlook-scan reply [--all] [--body TEXT|--body-file FILE] <message-id>")
@@ -358,9 +406,14 @@ func cmdReply(args []string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("empty reply body - provide --body, --body-file, or pipe text via stdin")
 	}
-	d, err := graph.New(auth).CreateReplyDraft(fs.Arg(0), *all, text)
+	c := graph.New(auth)
+	d, err := c.CreateReplyDraft(fs.Arg(0), *all)
 	if err != nil {
 		return draftError(err)
+	}
+	ct, content := mergeIntoDraft(d.Body, text, *asHTML)
+	if err := c.UpdateBody(d.ID, ct, content); err != nil {
+		return fmt.Errorf("draft created but its text could not be written (%s): %w", d.ID, err)
 	}
 	kind := "reply"
 	if *all {

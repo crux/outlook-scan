@@ -12,7 +12,8 @@ with your mailbox address so Claude knows whose mail it reaches.
 # outlook-scan — on-demand mailbox access via Microsoft Graph
 
 A CLI (`outlook-scan`, expected on PATH) that queries the mailbox live -
-read-only unless write mode is enabled (drafts only). Nothing is stored locally unless `--save` is passed.
+read-only unless write mode is enabled (drafts only). Nothing is stored
+locally unless `--save` is passed.
 
 ## Ground rules
 
@@ -85,6 +86,12 @@ outlook-scan forward --to "a@x.com" --body "FYI" "MESSAGE-ID"
 `--to/--cc/--bcc` repeat or take comma-separated lists. For bodies longer
 than a line or two, prefer piping/`--body-file` over `--body` to avoid
 shell quoting trouble.
+
+Text is plain by default; line breaks are preserved. Add `--html` (all
+three commands) when the draft should carry formatting - then the text
+must be HTML, e.g. `--html --body "<p>Hi <b>there</b></p>"`. Do not mix:
+plain text passed with `--html` loses its line breaks, and HTML passed
+without `--html` shows up as visible tags.
 
 Typical flows: "draft a reply to X saying Y" → read the mail with
 `get`/`thread` for context, compose, then `reply`. "Write a mail to Z

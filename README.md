@@ -24,9 +24,9 @@ outlook-scan search [--max N] "query"         server-side full-text search, all 
 outlook-scan get [--save DIR [--attachments]] MESSAGE-ID
 outlook-scan attachments [--save DIR] MESSAGE-ID
 outlook-scan thread [--save DIR] MESSAGE-ID|CONVERSATION-ID
-outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE]
-outlook-scan reply [--all] [--body TEXT|--body-file FILE] MESSAGE-ID   (write mode only; see below)
-outlook-scan forward --to ADDR [--cc ADDR] [--body TEXT|--body-file FILE] MESSAGE-ID
+outlook-scan draft --to ADDR [--cc ADDR] [--bcc ADDR] --subject TEXT [--body TEXT|--body-file FILE] [--html]
+outlook-scan reply [--all] [--body TEXT|--body-file FILE] [--html] MESSAGE-ID   (write mode only)
+outlook-scan forward --to ADDR [--cc ADDR] [--body TEXT|--body-file FILE] [--html] MESSAGE-ID
 ```
 
 ### Read-only by default; opt-in draft writing
@@ -39,6 +39,10 @@ from Outlook - enable write mode once:
 ```
 outlook-scan login --write      # requests Mail.ReadWrite; --read-only reverts
 ```
+
+Draft text is plain by default and keeps its line breaks; `--html` passes
+it through as HTML instead (`<p>`, `<b>`, lists, links), placed above the
+quoted original for replies and forwards.
 
 Trade-off: Microsoft has no drafts-only scope, so write mode grants
 `Mail.ReadWrite` (full mailbox read/write). It is opt-in per install;
